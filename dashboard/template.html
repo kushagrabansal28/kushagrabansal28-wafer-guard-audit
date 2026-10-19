@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The 0.99 F1 that wasn't | WaferGuard audit</title>
+<meta name="description" content="Audit of a wafer-defect detector that reported F1 0.99. Three silent bugs, measured on the real data, and what the model actually does.">
+<style>
+:root{
+  --paper:#f3efe5;--paper2:#ebe5d6;--ink:#1a1814;--ink2:#524c40;--ink3:#8a8373;--rule:#d6cfbd;
+  --signal:#d23a1d;--signal2:#f4d6cd;--teal:#0b7a69;--teal2:#d3e9e2;--ochre:#b27a00;--blue:#2f5fb8;--slate:#8c8678;
+  --serif:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Consolas,monospace;
+  --rail:168px;--measure:34rem
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --paper:#12110f;--paper2:#1b1a17;--ink:#efe9dc;--ink2:#b4ad9d;--ink3:#7d776a;--rule:#2f2c26;
+  --signal:#ff6a4d;--signal2:#3b1d16;--teal:#46c7b0;--teal2:#10302a;--ochre:#e3ab30;--blue:#7ea4ff;--slate:#6f695d}}
+:root[data-theme=dark]{
+  --paper:#12110f;--paper2:#1b1a17;--ink:#efe9dc;--ink2:#b4ad9d;--ink3:#7d776a;--rule:#2f2c26;
+  --signal:#ff6a4d;--signal2:#3b1d16;--teal:#46c7b0;--teal2:#10302a;--ochre:#e3ab30;--blue:#7ea4ff;--slate:#6f695d}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.62 var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--signal);color:#fff}
+a{color:inherit;text-decoration-color:var(--rule);text-underline-offset:3px}a:hover{text-decoration-color:var(--signal)}
+:focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:3px}
+.skip{position:absolute;left:-999px;top:8px;background:var(--ink);color:var(--paper);padding:8px 12px;z-index:100}.skip:focus{left:8px}
+code,.mono{font-family:var(--mono);font-size:.86em}
+code{background:var(--paper2);padding:1px 6px;border-radius:4px}
+::view-transition-old(root),::view-transition-new(root){animation-duration:.45s}
+
+/* rail */
+.rail{position:fixed;left:0;top:0;bottom:0;width:var(--rail);padding:28px 0 24px 28px;display:flex;flex-direction:column;z-index:20}
+.brand{font:600 15px/1.15 var(--serif);letter-spacing:.01em}.brand span{display:block;font:500 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin-top:4px}
+.rail ol{list-style:none;margin:40px 0 0;padding:0 0 0 14px;position:relative;flex:1}
+.rail ol::before,.rail ol i{content:"";position:absolute;left:0;top:6px;bottom:6px;width:1px;background:var(--rule)}
+.rail ol i{background:var(--signal);bottom:auto;height:0;transition:height .25s linear}
+.rail li a{display:flex;gap:10px;align-items:baseline;padding:5px 0;text-decoration:none;color:var(--ink3);font-size:13px;transition:color .25s}
+.rail li a b{font:500 11px var(--mono);width:18px}.rail li a span{transition:transform .3s cubic-bezier(.2,.7,.2,1)}
+.rail li a:hover{color:var(--ink)}.rail li.on a{color:var(--ink)}.rail li.on a span{transform:translateX(4px);font-weight:600}
+.tbtn{align-self:flex-start;border:1px solid var(--rule);background:transparent;color:var(--ink2);font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:7px 11px;border-radius:99px;cursor:pointer;transition:border-color .2s,color .2s}
+.tbtn:hover{border-color:var(--ink);color:var(--ink)}
+.mtop{display:none}.progress{position:fixed;left:0;right:0;top:0;height:2px;z-index:50;background:transparent}.progress i{display:block;height:100%;background:var(--signal);transform-origin:0 50%;transform:scaleX(0)}
+main{margin-left:var(--rail)}
+@media(max-width:1000px){
+  .rail{display:none}main{margin-left:0}
+  .mtop{display:flex;position:sticky;top:0;z-index:30;justify-content:space-between;align-items:center;padding:11px 18px;background:color-mix(in srgb,var(--paper) 90%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--rule);font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase}
+}
+
+/* layout atoms */
+.w{width:min(1040px,100% - 48px);margin-inline:auto}
+.col{width:min(var(--measure),100% - 48px);margin-inline:auto}
+@media(max-width:600px){.w,.col{width:calc(100% - 36px)}body{font-size:16px}}
+.kicker{font:500 12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin:0 0 14px}
+h1,h2,h3{font-family:var(--serif);font-weight:600;letter-spacing:-.018em;margin:0}
+.lead{font:400 clamp(19px,2.2vw,23px)/1.5 var(--serif);color:var(--ink2);max-width:36rem}
+p{margin:0 0 1em}.muted{color:var(--ink2)}.fine{font-size:13.5px;color:var(--ink3);line-height:1.5}
+
+/* title */
+.title{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding:84px 0 64px}
+.title h1{font-size:clamp(46px,8.4vw,112px);line-height:.98;letter-spacing:-.035em;max-width:11ch;margin:0 0 30px}
+.title h1 em{font-style:normal;color:var(--signal)}
+.meta{display:flex;flex-wrap:wrap;gap:10px 34px;margin-top:44px;padding-top:20px;border-top:1px solid var(--rule);font:500 12px var(--mono);letter-spacing:.06em;color:var(--ink2);text-transform:uppercase}
+.meta b{display:block;font:600 22px var(--serif);letter-spacing:-.01em;color:var(--ink);text-transform:none;margin-top:2px}
+.cue{display:inline-flex;align-items:center;gap:10px;margin-top:28px;font:500 12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+.cue i{display:block;width:1px;height:34px;background:linear-gradient(var(--ink3),transparent);animation:cue 2.2s ease-in-out infinite;transform-origin:top}
+@keyframes cue{0%{transform:scaleY(0)}50%{transform:scaleY(1)}100%{transform:scaleY(1);opacity:0}}
+
+/* chapters */
+.chap{padding:clamp(80px,12vw,150px) 0 0}
+.chap-head{display:grid;grid-template-columns:auto 1fr;column-gap:22px;margin-bottom:44px;align-items:start}
+.num{font:600 clamp(54px,8vw,104px)/.8 var(--serif);color:transparent;-webkit-text-stroke:1.2px var(--ink3);letter-spacing:-.04em}
+.chap-head h2{font-size:clamp(30px,4.6vw,54px);line-height:1.04}
+.chap-head .lead{grid-column:2;margin-top:16px}
+@media(max-width:600px){.chap-head{grid-template-columns:1fr}.chap-head .lead{grid-column:1}.num{margin-bottom:10px}}
+.rv{opacity:0;transform:translateY(18px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}.rv.in{opacity:1;transform:none}
+
+/* pinned stories */
+.story{height:calc(var(--n)*72svh + 40svh);position:relative}
+.pin{position:sticky;top:0;height:100svh;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:clamp(24px,4vw,64px);align-items:center;padding:24px 0}
+.cards{position:relative;min-height:15rem}
+.card{position:absolute;inset:0 0 auto 0;opacity:0;transform:translateY(16px);pointer-events:none;transition:opacity .5s ease,transform .6s cubic-bezier(.2,.7,.2,1)}
+.card.on{opacity:1;transform:none;pointer-events:auto}
+.card h3{font-size:clamp(24px,3vw,34px);line-height:1.1;margin:0 0 14px}
+.card .tag{display:inline-block;font:500 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin-bottom:12px}
+.dots{display:flex;gap:6px;margin-top:26px}.dots i{width:22px;height:3px;border-radius:2px;background:var(--rule);transition:background .3s,width .4s}.dots i.on{background:var(--signal);width:40px}
+@media(max-width:860px){
+  .pin{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);align-content:start;padding-top:64px;gap:14px}
+  .txt{order:2}.cards{min-height:11.5rem}.card h3{font-size:22px}.card p{font-size:15px}
+  .stage{order:1}
+}
+.stage{position:relative;min-width:0}
+canvas{display:block;width:100%}
+.facts{display:flex;flex-wrap:wrap;gap:6px 28px;margin-top:14px;font:500 12px var(--mono);color:var(--ink3);letter-spacing:.04em;text-transform:uppercase}
+.facts b{display:block;font:600 24px var(--serif);letter-spacing:-.01em;color:var(--ink);text-transform:none;transition:color .3s}
+.facts b.bad{color:var(--signal)}.facts b.good{color:var(--teal)}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink3);margin:10px 0 0}.key i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+
+/* hero numeral */
+.big{font:600 clamp(92px,17vw,200px)/.9 var(--serif);letter-spacing:-.05em;margin:0;transition:color .5s}
+.big.low{color:var(--signal)}
+.lab{font:500 12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);min-height:1.2em;margin-bottom:6px}
+.gauge{position:relative;height:10px;margin:34px 0 52px;background:var(--paper2);border-radius:99px}
+.gauge .fill{position:absolute;inset:0;border-radius:99px;background:var(--ochre);transform-origin:0 50%;transition:background .5s}
+.gauge .fill.low{background:var(--signal)}
+.gauge .tick{position:absolute;top:-9px;bottom:-9px;width:1px;background:var(--ink3)}
+.gauge .tick span{position:absolute;top:100%;left:0;transform:translateX(-50%);margin-top:6px;font:500 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);white-space:nowrap}
+.gauge .tick.t2 span{transform:translateX(-12%)}
+
+/* controls */
+.seg{display:inline-flex;gap:2px;border:1px solid var(--rule);border-radius:99px;padding:3px}
+.seg button,.btn{border:0;background:transparent;color:var(--ink2);font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:8px 14px;border-radius:99px;cursor:pointer;transition:background .2s,color .2s}
+.seg button:hover,.btn:hover{color:var(--ink)}.seg button.on{background:var(--ink);color:var(--paper)}
+.btn{border:1px solid var(--rule)}.btn:hover{border-color:var(--ink)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:24px;background:transparent;cursor:grab;touch-action:none}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--rule)}
+input[type=range]::-moz-range-track{height:2px;background:var(--rule)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-8px;border-radius:50%;background:var(--ink);border:3px solid var(--paper);box-shadow:0 0 0 1px var(--ink);transition:transform .15s}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--ink);border:3px solid var(--paper);box-shadow:0 0 0 1px var(--ink)}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.25)}
+.ctl{display:flex;flex-wrap:wrap;gap:18px 32px;align-items:flex-end;margin:0 0 20px}
+.ctl label{display:block;font:500 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);min-width:230px;flex:1}
+.ctl label b{color:var(--ink);font-weight:600}
+
+/* figure frame */
+.fig{margin:0 0 56px}.fig figcaption{margin-top:12px;max-width:var(--measure)}
+.panel{background:var(--paper2);border-radius:14px;padding:clamp(14px,2.4vw,26px)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:clamp(20px,4vw,56px)}@media(max-width:860px){.row2{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;font-size:14.5px}th,td{text-align:left;padding:9px 0;border-bottom:1px solid var(--rule)}th{font:500 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink3)}td.r,th.r{text-align:right}
+svg{display:block;width:100%;height:auto;overflow:visible}svg text{font-family:var(--sans)}
+
+/* matrix */
+.mat{border-collapse:separate;border-spacing:3px;width:auto}.mat td,.mat th{border:0;padding:0;text-align:center}
+.mat td{width:42px;height:34px;border-radius:5px;background:var(--paper);font:500 11.5px var(--mono);color:var(--ink3);transition:background .35s,color .35s}
+.mat td.d{background:var(--teal2);color:var(--teal);font-weight:600}.mat td.x{background:var(--signal2);color:var(--signal);font-weight:600}
+.mat th{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);padding:0 8px 0 0;text-align:right;white-space:nowrap}.mat tr:first-child th{text-align:center;padding:0 0 4px}
+
+/* explorer */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0 4px}
+.metrics div{border-top:2px solid var(--ink);padding-top:10px}.metrics b{display:block;font:600 clamp(28px,4.4vw,46px)/1 var(--serif);letter-spacing:-.025em}
+.metrics span{font:500 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink3)}
+@media(max-width:560px){.metrics{grid-template-columns:1fr 1fr}}
+#tip{position:fixed;z-index:60;pointer-events:none;background:var(--ink);color:var(--paper);font:500 12px/1.4 var(--mono);padding:7px 10px;border-radius:7px;opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s;white-space:nowrap}
+#tip.on{opacity:1;transform:none}
+.handle-hint{font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+.copy{display:flex;gap:10px;align-items:stretch;margin:0 0 10px}.copy pre{flex:1;margin:0;background:var(--paper2);border-radius:8px;padding:12px 14px;font:13px/1.55 var(--mono);overflow:auto}
+.links{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0 0}
+.verdict-list{counter-reset:v;list-style:none;padding:0;margin:0 0 28px}
+.verdict-list li{counter-increment:v;display:grid;grid-template-columns:44px 1fr;padding:18px 0;border-top:1px solid var(--rule)}
+.oi{display:grid;grid-template-columns:minmax(130px,200px) 1fr;gap:6px 26px;padding:24px 0;border-top:1px solid var(--rule);align-items:baseline}
+.oi:last-child{border-bottom:1px solid var(--rule)}.oi .on{font:600 clamp(34px,5.2vw,56px)/1 var(--serif);letter-spacing:-.03em;color:var(--signal)}
+.oi h3{font-size:19px;margin-bottom:4px}.oi p{margin:0}
+@media(max-width:600px){.oi{grid-template-columns:1fr}}
+.verdict-list li::before{content:counter(v,decimal-leading-zero);font:500 12px var(--mono);color:var(--signal);padding-top:5px}
+.verdict-list b{font:600 20px var(--serif);display:block;margin-bottom:4px}
+footer{padding:120px 0 60px}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.rv{opacity:1;transform:none;transition:none}.card{transition:none}.cue i{animation:none}*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="progress" aria-hidden="true"><i></i></div>
+<aside class="rail" aria-label="Chapters">
+  <div class="brand">WaferGuard<span>audit</span></div>
+  <ol id="railList"><i id="railFill"></i></ol>
+  <button class="tbtn" id="theme" aria-label="Switch between light and dark theme">Theme</button>
+</aside>
+<div class="mtop"><span id="mLabel">Start</span><button class="tbtn" id="theme2" aria-label="Switch theme">Theme</button></div>
+
+<main id="main">
+
+<section class="title" id="start" data-chapter="0" data-label="Start">
+  <div class="w">
+    <p class="kicker rv">Audit and repair &middot; Fab-7 wafer excursion detector</p>
+    <h1 class="rv">The 0.99 F1 that <em>wasn't</em></h1>
+    <p class="lead rv">A line-monitoring model was due to ship on Friday. Its notebook reported F1 above 0.90. This is what the same model does when it is tested the way production would use it.</p>
+    <div class="meta rv" id="titleMeta"></div>
+    <div class="cue rv"><i></i>Scroll</div>
+  </div>
+</section>
+
+<!-- 01 the claim -->
+<section class="chap" id="claim" data-chapter="1" data-label="The claim">
+  <div class="w"><header class="chap-head rv"><span class="num">01</span><h2>What each repair did to the score</h2><p class="lead">Three bugs inflated the number. Fix them one at a time and watch it fall.</p></header></div>
+  <div class="story" id="story-claim" style="--n:4">
+    <div class="pin w">
+      <div class="cards" id="claimCards">
+        <div class="card"><span class="tag">A &middot; The claim</span><h3>F1 0.990, well past the 0.90 release gate.</h3><p class="muted">That is what the supplied notebook printed. It scored the model on a test set that was 50% defective and about 46% synthetic.</p></div>
+        <div class="card"><span class="tag">B &middot; Fix the leakage</span><h3>Test it on real lots, in time order.</h3><p class="muted">Fit preprocessing on training rows only, split by time, drop SMOTE, and score on lots at their natural defect rate. The score falls to 0.188.</p></div>
+        <div class="card"><span class="tag">C &middot; Fix the loss</span><h3>Compare each rebuild with its own input.</h3><p class="muted">The reconstruction loss compared every rebuild with every sample in the batch. With that fixed, 0.112.</p></div>
+        <div class="card"><span class="tag">D &middot; Handle the legacy wafers</span><h3>Flag the sentinel, encode the codes.</h3><p class="muted">The final pipeline scores 0.105. Flagging every lot as defective scores 0.103. The model adds nothing.</p></div>
+      </div>
+      <div class="stage">
+        <div class="lab" id="heroLab">A &middot; Original notebook</div>
+        <p class="big" id="heroNum">0.990</p>
+        <div class="gauge" aria-hidden="true"><div class="fill" id="gFill"></div><div class="tick" id="gGate"><span>release gate 0.90</span></div><div class="tick t2" id="gFlag"><span>flag every lot</span></div></div>
+        <div class="facts" id="heroFacts"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col rv"><p class="fine">Rows B to D use the same untouched test split (313 lots, 17 defects). Only A to B is a large change, and it removes the leakage and the balanced test set together. B, C and D differ by less than the noise 17 defects produce, so the later repairs make the pipeline correct without being claimed to raise the score.</p></div>
+</section>
+
+<!-- 02 leakage -->
+<section class="chap" id="leakage" data-chapter="2" data-label="Leakage">
+  <div class="w"><header class="chap-head rv"><span class="num">02</span><h2>The test set had already seen the answers</h2><p class="lead">Statistics from every row, oversampling before the split, and a random split of time-ordered data.</p></header></div>
+  <div class="story" id="story-leak" style="--n:4">
+    <div class="pin w">
+      <div class="cards">
+        <div class="card"><span class="tag">The data</span><h3>1,567 lots, in the order they were made.</h3><p class="muted">Each square is one lot, read left to right and top to bottom like text. Red marks the 104 defective ones. Defects are common early and rare later: the process drifts.</p></div>
+        <div class="card"><span class="tag">What the original did</span><h3>A random split.</h3><p class="muted">Train, validation and test are scattered through time, so the model learns from lots that came after the ones it is tested on. Every test lot has training lots from its future.</p></div>
+        <div class="card"><span class="tag">And two more leaks</span><h3>Scaling and SMOTE saw everything.</h3><p class="muted">Means and standard deviations came from all 1,567 rows. SMOTE then invented 1,359 synthetic defects by blending real ones, and some of the blends landed in the test set. The result: 586 test rows, half of them defective.</p></div>
+        <div class="card"><span class="tag">The repair</span><h3>Split by time.</h3><p class="muted">The first 60% of lots train the model, the next 20% choose the epoch and threshold, and the last 20% are scored once. Nothing learned from a later lot can touch an earlier one.</p></div>
+      </div>
+      <div class="stage">
+        <canvas id="cvLeak" aria-label="Every lot coloured by train, validation or test assignment" style="aspect-ratio:1.55"></canvas>
+        <div class="key"><span><i style="background:var(--teal)"></i>train</span><span><i style="background:var(--ochre)"></i>validation</span><span><i style="background:var(--blue)"></i>test</span><span><i style="background:var(--signal)"></i>defective lot</span></div>
+        <div class="facts" id="leakFacts"></div>
+      </div>
+    </div>
+  </div>
+  <div class="w" style="margin-top:12px"><div class="row2">
+    <div class="rv"><h3 style="font-size:22px;margin-bottom:10px">Defect rate by month</h3><svg id="monthSvg" viewBox="0 0 460 190" role="img" aria-label="Defect rate by month"></svg></div>
+    <div class="rv"><h3 style="font-size:22px;margin-bottom:6px">Evidence</h3><table id="leakTbl"></table></div>
+  </div></div>
+</section>
+
+<!-- 03 loss -->
+<section class="chap" id="loss" data-chapter="3" data-label="Loss shapes">
+  <div class="w"><header class="chap-head rv"><span class="num">03</span><h2>A loss that never reached zero</h2><p class="lead">The reconstruction was compared with every sample in the batch, not just its own input.</p></header></div>
+  <div class="col rv">
+    <p>The loader added a channel axis, so targets had shape <code>[B, 1, F]</code> while reconstructions were <code>[B, F]</code>. PyTorch broadcast the pair to <code>[B, B, F]</code> without an error. The minimiser of that loss is the batch average, not a reconstruction.</p>
+  </div>
+  <div class="w rv"><figure class="fig panel" style="margin-top:30px">
+    <div class="ctl">
+      <label>Batch size <b id="bB"></b><input id="bBs" type="range" min="2" max="8" step="1" value="4" aria-label="Batch size"></label>
+      <label>Reconstruction error, &sigma; <b id="bS"></b><input id="bSs" type="range" min="0" max="2" step="0.05" value="0" aria-label="Reconstruction error"></label>
+      <div class="seg" id="lossSeg" role="group" aria-label="Loss version"><button class="on" data-l="ok">Correct</button><button data-l="bug">Original</button></div>
+    </div>
+    <div class="row2">
+      <div><div id="lossGrid" style="overflow:auto"></div><p class="fine" id="lossTxt" style="margin-top:12px"></p></div>
+      <div><svg id="lossSvg" viewBox="0 0 460 250" role="img" aria-label="Loss against reconstruction error for both versions"></svg></div>
+    </div>
+    <figcaption class="fine">Illustration with eight made-up values. Each cell is the squared difference between a rebuild and an input. Measured on a real batch of 64: <span id="lossMeasured"></span></figcaption>
+  </figure></div>
+</section>
+
+<!-- 04 legacy -->
+<section class="chap" id="legacy" data-chapter="4" data-label="Legacy wafers">
+  <div class="w"><header class="chap-head rv"><span class="num">04</span><h2>146 lots that were not measurements</h2><p class="lead">On probe station PS-L, <code>sensor_0</code> is a sentinel and <code>sensor_1</code> is a firmware code. The original scaled both as if they were readings.</p></header></div>
+  <div class="story" id="story-legacy" style="--n:3">
+    <div class="pin w">
+      <div class="cards">
+        <div class="card"><span class="tag">Raw values</span><h3>Two populations that share nothing.</h3><p class="muted">146 lots sit at <code>sensor_0 = 0</code>. Their <code>sensor_1</code> is not a measurement but a code: 100, 200 or 300. The other 1,421 lots form the cloud at the top right.</p></div>
+        <div class="card"><span class="tag">The original scaling</span><h3>The cloud collapses.</h3><p class="muted">With the sentinel and codes inflating the spread, the real wafers are squeezed into a small blob and the legacy lots land at z = &minus;3. Codes 100 and 300 end up only 0.30 apart, a distance that means nothing.</p></div>
+        <div class="card"><span class="tag">The repair</span><h3>Flag, encode, mask.</h3><p class="muted">Legacy lots get an explicit flag and a one-hot firmware code, and their continuous channels are masked. Statistics come from non-legacy rows only, so the real wafers keep their full spread.</p></div>
+      </div>
+      <div class="stage">
+        <canvas id="cvLegacy" aria-label="Sensor 0 against sensor 1 for every lot in three views" style="aspect-ratio:1.3"></canvas>
+        <div class="key"><span><i style="background:var(--signal)"></i>legacy lot (sentinel, firmware code)</span><span><i style="background:var(--slate)"></i>other lots</span></div>
+        <div class="facts" id="legFacts"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col rv"><p class="fine">None of the 146 legacy lots is defective, against 7.3% of the rest, so this is structure a model should have been able to use. SMOTE did not invent impossible codes (0 of 1,359 rows) only because no legacy lot is a defect. A <code>NaN</code> in <code>sensor_0</code> is a missing value, not a legacy marker. Lots missing either sensor are not drawn.</p></div>
+</section>
+
+<!-- 05 explorer -->
+<section class="chap" id="explorer" data-chapter="5" data-label="Explorer">
+  <div class="w"><header class="chap-head rv"><span class="num">05</span><h2>Every test lot, one threshold</h2><p class="lead">The repaired model on the untouched test split. Drag the line, or use the arrow keys on the slider.</p></header></div>
+  <div class="w rv">
+    <div class="panel">
+      <div class="ctl" style="margin-bottom:6px">
+        <label>Decision threshold <b id="thrV"></b><input id="thr" type="range" min="0" max="1" step="0.001" aria-label="Decision threshold"></label>
+        <div class="seg" id="presets" role="group" aria-label="Threshold presets"><button data-p="val">Validation-chosen</button><button data-p="flag">Flag every lot</button><button data-p="none">Flag none</button></div>
+      </div>
+      <canvas id="cvScore" style="height:150px;touch-action:none;cursor:ew-resize" aria-label="Model score of each test lot with a draggable threshold"></canvas>
+      <div class="key"><span><i style="background:var(--slate)"></i>passing lot</span><span><i style="background:var(--signal)"></i>defective lot</span><span class="handle-hint">drag the line</span></div>
+      <div class="metrics" id="mets"></div>
+      <div class="row2" style="margin-top:28px">
+        <div>
+          <h3 style="font-size:20px;margin-bottom:10px">All 313 lots, in time order</h3>
+          <canvas id="cvWaffle" style="aspect-ratio:2;" aria-label="Every test lot coloured by outcome"></canvas>
+          <div class="key"><span><i style="background:var(--teal)"></i>caught defect</span><span><i style="background:var(--signal);background:transparent;border:2px solid var(--signal);width:5px;height:5px"></i>missed defect</span><span><i style="background:var(--ochre)"></i>false alarm</span><span><i style="background:var(--slate);opacity:.5"></i>correct pass</span></div>
+          <p class="fine" id="exTxt" style="margin-top:12px"></p>
+        </div>
+        <div><h3 style="font-size:20px;margin-bottom:10px">Precision against recall</h3><svg id="prSvg" viewBox="0 0 440 320" role="img" aria-label="Precision recall curve"></svg></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 training -->
+<section class="chap" id="training" data-chapter="6" data-label="Training">
+  <div class="w"><header class="chap-head rv"><span class="num">06</span><h2>The network memorises the training defects</h2><p class="lead">Training loss falls to almost nothing while validation precision peaks in the first epoch. Drag across either chart.</p></header></div>
+  <div class="w rv"><div class="panel">
+    <div class="row2"><svg id="trA" viewBox="0 0 460 240" style="touch-action:none;cursor:ew-resize" role="img" aria-label="Training classification loss"></svg><svg id="trB" viewBox="0 0 460 240" style="touch-action:none;cursor:ew-resize" role="img" aria-label="Validation average precision"></svg></div>
+    <p class="fine" id="trTxt" style="margin-top:10px"></p>
+  </div></div>
+</section>
+
+<!-- 07 reliability -->
+<section class="chap" id="reliability" data-chapter="7" data-label="Reliability">
+  <div class="w"><header class="chap-head rv"><span class="num">07</span><h2>How far to trust 0.105</h2><p class="lead">With 17 test defects every number moves. Here is by how much.</p></header></div>
+  <div class="w rv"><div class="panel">
+    <div class="seg" id="forestSeg" role="group" aria-label="Metric"><button class="on" data-m="f1">F1</button><button data-m="pr_auc">PR-AUC</button></div>
+    <svg id="forest" viewBox="0 0 760 330" style="margin-top:16px" role="img" aria-label="Forest plot of the model, baselines and seeds"></svg>
+    <p class="fine">The bar is the bootstrap 95% interval over test lots (2,000 draws). Dots are five seeds of the full pipeline. The dashed line is the trivial reference: flagging every lot for F1, the defect prevalence for PR-AUC.</p>
+    <table id="seedTbl" style="margin-top:18px"></table>
+  </div></div>
+</section>
+
+<!-- 08 other defects -->
+<section class="chap" id="others" data-chapter="8" data-label="Other defects">
+  <div class="w"><header class="chap-head rv"><span class="num">08</span><h2>Five more things that were wrong</h2><p class="lead">Smaller than the three above. Each one is measured on the data.</p></header></div>
+  <div class="col" id="otherList" style="width:min(46rem,100% - 48px)"></div>
+</section>
+
+<!-- 09 other models -->
+<section class="chap" id="models" data-chapter="9" data-label="Other models">
+  <div class="w"><header class="chap-head rv"><span class="num">09</span><h2>Would a different model do better?</h2><p class="lead">One test split holds 17 defects. So the same question was asked over five consecutive future windows, every model trained only on the lots before each one.</p></header></div>
+  <div class="w rv"><div class="panel">
+    <svg id="btSvg" viewBox="0 0 760 300" role="img" aria-label="ROC-AUC per future window for four models"></svg>
+    <p class="fine" id="btCap" style="margin-top:6px"></p>
+    <table id="btTbl" style="margin-top:16px"></table>
+  </div></div>
+  <div class="col rv" style="margin-top:28px"><p>The repaired autoencoder has not shown skill: its interval includes 0.5 and it is the weakest of the four. The simpler models have a weak but real ranking signal, so the data is not empty and the supplied architecture is a poor fit for it. The tree models' higher PR-AUC comes almost entirely from one window with 7 defects; in the others they sit near the prevalence.</p><p class="fine">Settings were fixed in advance. Only the logistic regression's regularisation is chosen, on a validation slice of the past. Nothing was tuned on these windows.</p></div>
+</section>
+
+<!-- 10 verdict -->
+<section class="chap" id="verdict" data-chapter="10" data-label="Verdict">
+  <div class="w"><header class="chap-head rv"><span class="num">10</span><h2>Do not ship it</h2><p class="lead">The model as supplied has no usable skill on this data. Here is what that rests on, and how to check it yourself.</p></header></div>
+  <div class="col rv">
+    <ol class="verdict-list">
+      <li><div><b>The headline was an artefact.</b>F1 0.990 came from a test set that was half synthetic and half defective, fitted on all rows and split at random.</div></li>
+      <li><div><b>The repaired model does not beat a trivial rule.</b>F1 0.105 against 0.103 for flagging every lot. It catches 2 of 17 defects with 19 false alarms.</div></li>
+      <li><div id="v3"></div></li>
+    </ol>
+    <p class="muted">Everything on this page is computed by the code in the repository. The page replays results; nothing is retrained in your browser.</p>
+    <div id="cmds"></div>
+    <div class="links"><a class="btn" href="AUDIT.md">AUDIT.md</a><a class="btn" href="wafer_guard_fixed.ipynb">Notebook</a><a class="btn" href="README.md">README</a></div>
+  </div>
+</section>
+<footer><div class="col"><p class="fine">WaferGuard audit. Built by <code>dashboard/build_dashboard.py</code> from the repository's own outputs.</p></div></footer>
+</main>
+<div id="tip" role="status"></div>
+<noscript><div class="col"><p>This report draws its figures with JavaScript. The findings are in AUDIT.md.</p></div></noscript>
+
+<script>
+const D=/*DATA*/null;
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x)),lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hex=h=>{h=h.replace('#','');if(h.length===3)h=[...h].map(c=>c+c).join('');const n=parseInt(h,16);return[n>>16&255,n>>8&255,n&255]};
+const rgba=(c,a=1)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+const f3=x=>x.toFixed(3),pct=(x,d=1)=>(x*100).toFixed(d)+'%';
+function mulberry32(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function fit(cv){const dpr=Math.min(2,devicePixelRatio||1),r=cv.getBoundingClientRect(),w=Math.max(1,Math.round(r.width)),h=Math.max(1,Math.round(r.height));if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}const c=cv.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);return{c,w,h}}
+const redraws=[];const onRedraw=f=>{redraws.push(f);f()};const redrawAll=()=>redraws.forEach(f=>f());
+/* timed animation that always lands on its final state, even if frames are throttled */
+function anim(ms,step,done){if(reduce){step(1);done&&done();return{cancel(){}}}let dead=false,fin=false;const t0=performance.now();
+const end=()=>{if(fin||dead)return;fin=true;step(1);done&&done()};const tm=setTimeout(end,ms+80);
+(function f(n){if(dead||fin)return;const t=clamp((n-t0)/ms);step(t);if(t<1)requestAnimationFrame(f);else{fin=true;clearTimeout(tm);done&&done()}})(t0);return{cancel(){dead=true;clearTimeout(tm)}}}
+
+/* ---------- theme ---------- */
+const isDark=()=>{const t=document.documentElement.dataset.theme;return t?t==='dark':matchMedia('(prefers-color-scheme: dark)').matches};
+try{const s=localStorage.getItem('wg-theme');if(s)document.documentElement.dataset.theme=s}catch(e){}
+const flip=()=>{const t=isDark()?'light':'dark';const apply=()=>{document.documentElement.dataset.theme=t;try{localStorage.setItem('wg-theme',t)}catch(e){}redrawAll()};document.startViewTransition&&!reduce?document.startViewTransition(apply):apply()};
+$('#theme').onclick=flip;$('#theme2').onclick=flip;matchMedia('(prefers-color-scheme: dark)').addEventListener('change',redrawAll);
+let rzt;addEventListener('resize',()=>{clearTimeout(rzt);rzt=setTimeout(()=>{redrawAll();update()},120)});
+
+/* ---------- reveal ---------- */
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+$$('.rv').forEach((e,i)=>{e.style.transitionDelay=(i%3)*80+'ms';io.observe(e)});
+
+/* ---------- rail, progress, pinned stories ---------- */
+const chapters=$$('[data-chapter]'),railList=$('#railList');
+chapters.forEach(s=>{const li=document.createElement('li');li.innerHTML=`<a href="#${s.id}"><b>${String(s.dataset.chapter).padStart(2,'0')}</b><span>${s.dataset.label}</span></a>`;railList.appendChild(li)});
+const railItems=$$('#railList li');
+const stories=[];
+function story(el,cfg){const o={el,n:+getComputedStyle(el).getPropertyValue('--n')||3,step:-1,cfg};
+  const pin=$('.cards',el);o.cards=$$('.card',pin);const d=document.createElement('div');d.className='dots';d.innerHTML=o.cards.map(()=>'<i></i>').join('');
+  const wrap=document.createElement('div');wrap.className='txt';pin.before(wrap);wrap.append(pin,d);o.dots=$$('i',d);
+  stories.push(o);return o}
+function update(){const vh=innerHeight;
+  stories.forEach(o=>{const r=o.el.getBoundingClientRect(),total=Math.max(1,r.height-vh),p=clamp(-r.top/total),i=Math.min(o.n-1,Math.floor(p*o.n));o.p=p;
+    if(i!==o.step){o.step=i;o.cards.forEach((c,k)=>c.classList.toggle('on',k===i));o.dots.forEach((c,k)=>c.classList.toggle('on',k===i));o.cfg.onStep&&o.cfg.onStep(i)}
+    o.cfg.onProgress&&o.cfg.onProgress(p)});
+  const h=document.documentElement,frac=clamp(h.scrollTop/Math.max(1,h.scrollHeight-h.clientHeight));
+  $('.progress i').style.transform=`scaleX(${frac})`;
+  let cur=0;chapters.forEach((s,i)=>{if(s.getBoundingClientRect().top<vh*.4)cur=i});
+  railItems.forEach((l,i)=>l.classList.toggle('on',i===cur));
+  const ol=railList.getBoundingClientRect();$('#railFill').style.height=(railItems[cur].offsetTop+railItems[cur].offsetHeight/2-6)+'px';
+  $('#mLabel').textContent=String(chapters[cur].dataset.chapter).padStart(2,'0')+' · '+chapters[cur].dataset.label}
+addEventListener('scroll',update,{passive:true});
+
+/* ---------- title ---------- */
+(function(){const m=D.test.metrics;$('#titleMeta').innerHTML=`<div>Verdict<b style="color:var(--signal)">No-go</b></div><div>Reported F1<b>${f3(D.evidence.original.f1)}</b></div><div>Measured F1<b>${f3(m.f1)}</b></div><div>Untouched test lots<b>${m.n}</b></div>`})();
+
+/* ---------- 01 the claim ---------- */
+(function(){const L=D.ladder,o=D.evidence.original,fl=D.baselines.flag.f1,n=4;
+const num=$('#heroNum'),fill=$('#gFill'),lab=$('#heroLab'),facts=$('#heroFacts');
+$('#gGate').style.left='90%';$('#gFlag').style.left=(fl*100)+'%';
+const info=[[`A · Original notebook`,`${o.n} test rows`,pct(o.prevalence,0)+' defective',L[0].pr_auc],[`B · Leakage fixed`,`${D.test.metrics.n} real lots`,pct(D.test.prevalence,2)+' defective',L[1].pr_auc],[`C · Loss fixed`,`${D.test.metrics.n} real lots`,pct(D.test.prevalence,2)+' defective',L[2].pr_auc],[`D · Legacy handling`,`${D.test.metrics.n} real lots`,pct(D.test.prevalence,2)+' defective',L[3].pr_auc]];
+const val=L.map(r=>r.f1);let tp=0,dp=-1,run=false,ft;
+function value(p){const i=Math.min(n-1,Math.floor(p*n)),t=p*n-i;if(i===0)return val[0];return lerp(val[i-1],val[i],ease(clamp(t/.45)))}
+function render(p){const v=value(p);num.textContent=v.toFixed(3);fill.style.transform=`scaleX(${v})`;const low=v<.5;num.classList.toggle('low',low);fill.classList.toggle('low',low)}
+const s=story($('#story-claim'),{onStep(i){const x=info[i];lab.textContent=x[0];facts.innerHTML=`<div>Test set<b>${x[1]}</b></div><div>Prevalence<b>${x[2]}</b></div><div>PR-AUC<b class="${i?'bad':''}">${x[3].toFixed(3)}</b></div>`},
+ onProgress(p){tp=p;if(reduce){render(p);return}if(!run){run=true;requestAnimationFrame(loop)}clearTimeout(ft);ft=setTimeout(()=>{dp=tp;render(dp)},500)}});
+function loop(){if(dp<0)dp=tp;dp+=(tp-dp)*.14;if(Math.abs(tp-dp)<.0005){dp=tp;run=false}render(dp);if(run)requestAnimationFrame(loop)}
+render(0)})();
+
+/* ---------- 02 leakage waffle ---------- */
+(function(){const L=D.lots,N=L.length,n=D.splits.map(s=>s.n),cv=$('#cvLeak');
+const chrono=L.map((_,i)=>i<n[0]?0:i<n[0]+n[1]?1:2);
+const r=mulberry32(7),idx=[...Array(N).keys()];for(let i=N-1;i>0;i--){const j=Math.floor(r()*(i+1));[idx[i],idx[j]]=[idx[j],idx[i]]}
+const rand=Array(N);idx.forEach((p,k)=>rand[p]=k<n[0]?0:k<n[0]+n[1]?1:2);const neutral=Array(N).fill(3);
+let cur=neutral.map(()=>[0,0,0]),start=cur.map(c=>c.slice()),tgtA=neutral,prog=1,job=null;
+const pal=()=>[hex(css('--teal')),hex(css('--ochre')),hex(css('--blue')),hex(css('--slate'))];
+function stats(a){const lt=Math.max(...a.map((s,i)=>s===0?i:-1)),te=a.map((s,i)=>s===2?i:-1).filter(i=>i>=0),late=te.filter(i=>i<lt).length/te.length,rate=s=>{const ii=a.map((v,i)=>v===s?i:-1).filter(i=>i>=0);return ii.reduce((q,i)=>q+L[i][1],0)/ii.length};return{late,tr:rate(0),te:rate(2)}}
+function draw(){const{c,w,h}=fit(cv);c.clearRect(0,0,w,h);const cols=Math.ceil(Math.sqrt(N*w/h)),rows=Math.ceil(N/cols),cell=Math.min(w/cols,h/rows),ox=(w-cell*cols)/2,oy=(h-cell*rows)/2,sz=cell*.74,sig=hex(css('--signal')),paper=css('--paper');
+for(let i=0;i<N;i++){const k=prog>=1?1:clamp(prog*1.9-i/N*.9),t=ease(k),a=start[i],b=pal()[tgtA[i]],col=[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];cur[i]=col;
+ const x=ox+(i%cols)*cell+(cell-sz)/2,y=oy+Math.floor(i/cols)*cell+(cell-sz)/2;c.fillStyle=rgba(col,.9);c.fillRect(x,y,sz,sz);
+ if(L[i][1]){c.beginPath();c.arc(x+sz/2,y+sz/2,sz*.52,0,7);c.fillStyle=rgba(sig);c.fill();c.lineWidth=1.2;c.strokeStyle=paper;c.stroke()}}
+c.fillStyle=css('--ink3');c.font='500 10px '+css('--mono');c.textAlign='left';c.fillText('first lot, Jul 19',ox,oy-5>8?oy-5:9);c.textAlign='right';c.fillText('last lot, Oct 17',w-ox,h-2)}
+function go(a){if(a===tgtA&&prog>=1)return;if(job)job.cancel();start=cur.map(c=>c.slice());tgtA=a;prog=0;job=anim(900,t=>{prog=t;draw()})}
+function facts(s,good){const q=(g,v)=>v;$('#leakFacts').innerHTML=s?`<div>Test lots with training lots from their future<b class="${good?'good':'bad'}">${pct(s.late,0)}</b></div><div>Defect rate in train<b>${pct(s.tr)}</b></div><div>Defect rate in test<b>${pct(s.te)}</b></div>`:`<div>Lots<b>${N.toLocaleString()}</b></div><div>Defective<b class="bad">${D.meta.defects}</b></div><div>Overall rate<b>${pct(D.meta.prevalence,2)}</b></div>`}
+story($('#story-leak'),{onStep(i){if(i===0){go(neutral);facts(null)}else if(i<3){go(rand);facts(stats(rand),false)}else{go(chrono);facts(stats(chrono),true)}}});
+onRedraw(draw)})();
+(function(){const M=D.months;function months(){const mx=Math.max(...M.map(m=>m.rate))*1.2;let s=`<line x1="0" x2="460" y1="150" y2="150" stroke="${css('--rule')}"/>`;
+M.forEach((m,i)=>{const bw=70,x=24+i*(bw+34),h=m.rate/mx*118;s+=`<rect x="${x}" y="${150-h}" width="${bw}" height="${h}" fill="${css('--signal')}" opacity=".9"/><text x="${x+bw/2}" y="${144-h}" text-anchor="middle" font-size="15" font-weight="600" font-family="${css('--serif')}" fill="${css('--ink')}">${pct(m.rate)}</text><text x="${x+bw/2}" y="168" text-anchor="middle" font-size="11" fill="${css('--ink3')}" font-family="${css('--mono')}">${['Jul','Aug','Sep','Oct'][i]||m.m}</text><text x="${x+bw/2}" y="183" text-anchor="middle" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${m.lots} lots</text>`});$('#monthSvg').innerHTML=s}
+onRedraw(months);const ev=D.evidence,o=ev.original;
+$('#leakTbl').innerHTML=`<tr><th>Measure</th><th class="r">Value</th></tr><tr><td>Original F1 on its own test set</td><td class="r"><b>${f3(o.f1)}</b></td></tr><tr><td>Its test set: rows, prevalence</td><td class="r">${o.n}, ${pct(o.prevalence,0)}</td></tr><tr><td>Synthetic rows added by SMOTE</td><td class="r">${o.n_synthetic_total.toLocaleString()} to ${o.n_real.toLocaleString()} real</td></tr><tr><td>Feature means that move over 0.25 sd (all rows vs train only)</td><td class="r">${ev.leak.n_features_shift_gt_0_25_sd} of ${ev.leak.n_features}</td></tr><tr><td>Distance to nearest training row: random vs chronological</td><td class="r">${ev.nn.random_split_mean_nn_dist.toFixed(1)} vs ${ev.nn.chronological_mean_nn_dist.toFixed(1)}</td></tr><tr><td>F1 with only the leakage fixed</td><td class="r"><b>${f3(D.ladder[1].f1)}</b></td></tr>`})();
+
+/* ---------- 03 loss ---------- */
+(function(){const v=[2,5,3,8,1,6,4,7];let bug=false;
+const e=D.evidence.loss;$('#lossMeasured').textContent=`(${e.broadcast_shape.join(', ')}) after broadcasting; loss at a perfect reconstruction ${e.loss_at_perfect_reconstruction_buggy.toFixed(3)} (original) against ${e.loss_at_perfect_reconstruction_correct.toFixed(3)} (correct).`;
+function draw(){const B=+$('#bBs').value,sg=+$('#bSs').value,x=v.slice(0,B);$('#bB').textContent=B;$('#bS').textContent=sg.toFixed(2);
+const mean=x.reduce((a,b)=>a+b,0)/B,floor=2*x.reduce((a,b)=>a+(b-mean)**2,0)/B;
+let h='<table class="mat"><tr><th></th>'+x.map((_,j)=>`<th>in ${j+1}</th>`).join('')+'</tr>';let sum=0,cnt=0;
+for(let i=0;i<B;i++){h+=`<tr><th>out ${i+1}</th>`;for(let j=0;j<B;j++){const sq=(x[i]-x[j])**2,on=bug||i===j;if(on){sum+=sq;cnt++}h+=`<td class="${i===j?'d':on?'x':''}">${on?sq:''}</td>`}h+='</tr>'}
+$('#lossGrid').innerHTML=h+'</table>';
+const cor=sg*sg,bg=sg*sg+floor;$('#lossTxt').innerHTML=`${bug?'Original':'Correct'}: ${cnt} comparisons (${bug?'B × B':'B'}). At error σ = ${sg.toFixed(2)} the loss is <b>${(bug?bg:cor).toFixed(2)}</b>. ${bug?`Even with σ = 0 it cannot go below <b>${floor.toFixed(2)}</b>, the spread of the batch itself.`:'It is zero when the rebuild is perfect, and grows with the error.'}`;
+const W=460,H=250,L0=44,T=16,Bm=34,mx=Math.max(4*2*2+floor,4)*1.05,X=s=>L0+s/2*(W-L0-12),Y=q=>T+(1-q/mx)*(H-T-Bm);let s='';
+for(let k=0;k<=4;k++){const q=mx*k/4;s+=`<line x1="${L0}" x2="${W-12}" y1="${Y(q)}" y2="${Y(q)}" stroke="${css('--rule')}"/><text x="${L0-6}" y="${Y(q)+4}" text-anchor="end" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${q.toFixed(0)}</text>`}
+[0,.5,1,1.5,2].forEach(q=>s+=`<text x="${X(q)}" y="${H-16}" text-anchor="middle" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${q}</text>`);
+s+=`<text x="${(L0+W)/2}" y="${H-2}" text-anchor="middle" font-size="11" fill="${css('--ink3')}">reconstruction error σ</text>`;
+const path=f=>{let p='';for(let i=0;i<=40;i++){const q=i/20;p+=(i?'L':'M')+X(q)+' '+Y(f(q))}return p};
+s+=`<path d="${path(q=>q*q)}" fill="none" stroke="${css('--teal')}" stroke-width="2.4"/><path d="${path(q=>q*q+floor)}" fill="none" stroke="${css('--signal')}" stroke-width="2.4"/>`;
+s+=`<text x="${X(1.2)}" y="${Y(1.2*1.2)+18}" font-size="11" fill="${css('--teal')}" font-weight="600">correct</text><text x="${X(.08)}" y="${Y(floor)-8}" font-size="11" fill="${css('--signal')}" font-weight="600">original, floor ${floor.toFixed(1)}</text>`;
+s+=`<line x1="${X(sg)}" x2="${X(sg)}" y1="${T}" y2="${H-Bm}" stroke="${css('--ink3')}" stroke-dasharray="3 3"/><circle cx="${X(sg)}" cy="${Y(cor)}" r="5.5" fill="${css('--teal')}"/><circle cx="${X(sg)}" cy="${Y(bg)}" r="5.5" fill="${css('--signal')}"/>`;$('#lossSvg').innerHTML=s}
+$$('#bBs,#bSs').forEach(e=>e.oninput=draw);$$('#lossSeg button').forEach(b=>b.onclick=()=>{bug=b.dataset.l==='bug';$$('#lossSeg button').forEach(x=>x.classList.toggle('on',x===b));draw()});onRedraw(draw)})();
+
+/* ---------- 04 legacy scatter morph ---------- */
+(function(){const S=D.scatter,I=D.evidence.invariant,L=D.lots,N=S.s0.length,m=D.meta,cv=$('#cvLegacy');
+const ext=[{x:[-250,3600],y:[-120,3000]},{x:[-4.4,3.4],y:[-4.4,3.4]},{x:[-5.4,5.4],y:[-10.4,5.4]}];
+const code=i=>S.s1[i],isLeg=i=>L[i][2]===1;
+const pos=[[],[],[]];const gold=Math.PI*(3-Math.sqrt(5));let ln=[0,0,0,0];
+for(let i=0;i<N;i++){const a=S.s0[i],b=S.s1[i];
+ if(a===null||b===null){pos[0].push(null);pos[1].push(null);pos[2].push(null);continue}
+ pos[0].push([a,b]);pos[1].push([(a-I.sensor_0_mean_all)/I.sensor_0_std_all,(b-I.sensor_1_mean_all)/I.sensor_1_std_all]);
+ if(isLeg(i)){const lane=b===100?0:b===200?1:2,k=ln[lane]++,rad=.17*Math.sqrt(k+1);pos[2].push([[-3.2,0,3.2][lane]+rad*Math.cos(k*gold)*1.5,-7.5+rad*Math.sin(k*gold)])}
+ else pos[2].push([clamp((a-I.sensor_0_mean_nonlegacy)/I.sensor_0_std_nonlegacy,-5.2,5.2),clamp((b-I.sensor_1_mean_nonlegacy)/I.sensor_1_std_nonlegacy,-5.2,5.2)])}
+let view=0,from=0,prog=1,job=null,pw=0,ph=0;const PAD=34;
+const px=(v,p,w,h)=>[PAD+(p[0]-ext[v].x[0])/(ext[v].x[1]-ext[v].x[0])*(w-PAD-10),h-PAD-(p[1]-ext[v].y[0])/(ext[v].y[1]-ext[v].y[0])*(h-PAD-10)];
+const AX=[{t:'raw sensor values',xs:[0,1000,2000,3000],ys:[0,1000,2000,3000],x:'sensor_0',y:'sensor_1'},{t:'original scaling: z-scores over all rows',xs:[-3,-2,-1,0,1,2,3],ys:[-3,-2,-1,0,1,2,3],x:'sensor_0, z',y:'sensor_1, z'},{t:'after the repair',xs:[-4,-2,0,2,4],ys:[-4,-2,0,2,4],x:'sensor_0, z',y:'sensor_1, z'}];
+function axes(v,a,w,h){if(a<=0.01)return;const c0=$('#cvLegacy').getContext('2d'),A=AX[v];c0.globalAlpha=a;c0.font='500 10px '+css('--mono');c0.fillStyle=css('--ink3');c0.strokeStyle=css('--rule');c0.lineWidth=1;
+ const yb=v===2?px(2,[0,-5.1],w,h)[1]:h-PAD;
+ A.xs.forEach(t=>{const[x]=px(v,[t,ext[v].y[0]],w,h);c0.beginPath();c0.moveTo(x,10);c0.lineTo(x,yb);c0.stroke();c0.textAlign='center';c0.fillText(t,x,yb+13)});
+ A.ys.forEach(t=>{const[,y]=px(v,[ext[v].x[0],t],w,h);c0.beginPath();c0.moveTo(PAD,y);c0.lineTo(w-10,y);c0.stroke();c0.textAlign='right';c0.fillText(t,PAD-6,y+3)});
+ c0.textAlign='left';c0.fillText(A.t,PAD+4,h-4);c0.textAlign='right';c0.fillText(A.x+' →',w-10,22);c0.globalAlpha=1;
+ if(v===2){const lbl=[['code 100',-3.2,m.codes['100']],['code 200',0,m.codes['200']],['code 300',3.2,m.codes['300']]];c0.textAlign='center';lbl.forEach(l=>{const[x,y]=px(2,[l[1],-9.7],w,h);c0.fillText(`${l[0]} · ${l[2]} lots`,x,y)})}}
+function draw(){const{c,w,h}=fit(cv);pw=w;ph=h;c.clearRect(0,0,w,h);const t=ease(prog),sig=css('--signal'),sl=hex(css('--slate'));
+ axes(from,1-t,w,h);axes(view,t,w,h);
+ for(let pass=0;pass<2;pass++)for(let i=0;i<N;i++){const leg=isLeg(i);if((pass===1)!==leg)continue;const a=pos[from][i],b=pos[view][i];if(!a||!b)continue;
+  const k=prog>=1?1:clamp(prog*1.7-(i%97)/97*.7),tt=ease(k),A=px(from,a,w,h),B=px(view,b,w,h),x=lerp(A[0],B[0],tt),y=lerp(A[1],B[1],tt);
+  c.beginPath();c.arc(x,y,leg?3.1:2.4,0,7);c.fillStyle=leg?sig:rgba(sl,.5);c.fill()}}
+function go(v){if(v===view&&prog>=1)return;if(job)job.cancel();from=view;view=v;prog=0;job=anim(1100,t=>{prog=t;draw()})}
+story($('#story-legacy'),{onStep(i){go(i);const f=[[`${m.legacy}`,'legacy lots','bad'],[`${m.codes['100']} / ${m.codes['200']} / ${m.codes['300']}`,'codes 100 / 200 / 300',''],[`${m.legacy_defects} of ${m.legacy}`,'legacy lots that are defective','good']];
+ $('#legFacts').innerHTML=i===0?`<div>Legacy lots<b class="bad">${m.legacy}</b></div><div>Other lots<b>${(m.lots-m.legacy).toLocaleString()}</b></div><div>Firmware codes<b>100 / 200 / 300</b></div>`:i===1?`<div>sensor_0 spread<b class="bad">${I.sensor_0_std_nonlegacy.toFixed(1)} → ${I.sensor_0_std_all.toFixed(1)}</b></div><div>sensor_1 spread<b class="bad">${I.sensor_1_std_nonlegacy.toFixed(1)} → ${I.sensor_1_std_all.toFixed(1)}</b></div><div>Codes 100 vs 300 apart<b>${I.code_100_vs_300_zscore_gap.toFixed(2)} z</b></div>`:`<div>Defective legacy lots<b class="good">${m.legacy_defects} of ${m.legacy}</b></div><div>Defect rate elsewhere<b>${pct(m.other_rate)}</b></div><div>Features after repair<b>${m.features}</b></div>`}});
+onRedraw(draw)})();
+
+/* ---------- 05 explorer ---------- */
+(function(){const Y=D.test.y,P=D.test.p,T=D.test.t,N=Y.length,prev=D.test.prevalence,thrVal=D.test.threshold,pos=Y.reduce((a,b)=>a+b,0);
+const r=mulberry32(3),jit=Y.map(()=>r()),lo=Math.max(0,Math.floor((Math.min(...P)-.02)*20)/20),hi=Math.min(1,Math.ceil((Math.max(...P)+.02)*20)/20);
+const order=[...P.keys()].sort((a,b)=>P[b]-P[a]);let tp=0,fp=0;const pr=[];order.forEach((i,k)=>{Y[i]?tp++:fp++;if(k===N-1||P[order[k+1]]!==P[i])pr.push([tp/pos,tp/(tp+fp)])});
+let thr=thrVal,cvS=$('#cvScore'),drag=false,job=null;const tip=$('#tip');
+const counts=t=>{let a=0,b=0,c=0,d=0;for(let i=0;i<N;i++){const f=P[i]>=t;if(Y[i]){f?a++:c++}else{f?b++:d++}}return{tp:a,fp:b,fn:c,tn:d}};
+const SX=(v,w)=>12+clamp((v-lo)/(hi-lo))*(w-24),SV=(x,w)=>lo+clamp((x-12)/(w-24))*(hi-lo);
+function strip(){const{c,w,h}=fit(cvS);c.clearRect(0,0,w,h);const x0=SX(thr,w);c.fillStyle=css('--teal');c.globalAlpha=.1;c.fillRect(x0,0,w-x0,h-24);c.globalAlpha=1;
+ const sl=css('--slate'),sg=css('--signal');for(const want of[false,true])for(let i=0;i<N;i++){if(!!Y[i]!==want)continue;c.beginPath();c.arc(SX(P[i],w),14+jit[i]*(h-56),want?5:2.8,0,7);c.fillStyle=want?sg:sl;c.globalAlpha=want?1:.55;c.fill();if(want){c.lineWidth=1.5;c.strokeStyle=css('--paper2');c.stroke()}}c.globalAlpha=1;
+ c.strokeStyle=css('--ink');c.lineWidth=2;c.beginPath();c.moveTo(x0,0);c.lineTo(x0,h-24);c.stroke();c.fillStyle=css('--ink');c.beginPath();c.arc(x0,h-24,7,0,7);c.fill();c.strokeStyle=css('--paper2');c.lineWidth=2.5;c.stroke();
+ c.fillStyle=css('--ink3');c.font='500 10px '+css('--mono');c.textAlign='center';for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5;c.fillText(v.toFixed(2),SX(v,w),h-4)}}
+const cols=26,rows=Math.ceil(N/cols);let wf={};
+function waffle(k){const cv=$('#cvWaffle'),{c,w,h}=fit(cv);c.clearRect(0,0,w,h);const cell=Math.min(w/cols,h/rows),ox=(w-cell*cols)/2,oy=(h-cell*rows)/2,sz=cell*.74;wf={cell,ox,oy,w};
+ for(let i=0;i<N;i++){const x=ox+(i%cols)*cell+(cell-sz)/2,y=oy+Math.floor(i/cols)*cell+(cell-sz)/2,f=P[i]>=thr;
+  if(Y[i]&&f){c.fillStyle=css('--teal');c.beginPath();c.arc(x+sz/2,y+sz/2,sz*.62,0,7);c.fill()}
+  else if(Y[i]){c.lineWidth=2;c.strokeStyle=css('--signal');c.beginPath();c.arc(x+sz/2,y+sz/2,sz*.52,0,7);c.stroke()}
+  else if(f){c.fillStyle=css('--ochre');c.fillRect(x,y,sz,sz)}
+  else{c.fillStyle=css('--slate');c.globalAlpha=.4;c.fillRect(x,y,sz,sz);c.globalAlpha=1}}}
+function prChart(k){const Wd=440,Ht=320,L=44,R=14,T=14,B=38,lr=D.baselines.logreg,ym=Math.min(1,Math.max(.2,...pr.map(p=>p[1]),lr.precision,prev)*1.15),X=v=>L+v*(Wd-L-R),Yy=v=>T+(1-v/ym)*(Ht-T-B);let s='';
+ [0,1,2,3,4].forEach(q=>{const v=ym*q/4;s+=`<line x1="${L}" x2="${Wd-R}" y1="${Yy(v)}" y2="${Yy(v)}" stroke="${css('--rule')}"/><text x="${L-6}" y="${Yy(v)+4}" text-anchor="end" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${v.toFixed(2)}</text>`});
+ [0,.25,.5,.75,1].forEach(v=>s+=`<text x="${X(v)}" y="${Ht-20}" text-anchor="middle" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${v}</text>`);
+ s+=`<text x="${(L+Wd)/2}" y="${Ht-4}" text-anchor="middle" font-size="11" fill="${css('--ink3')}">recall</text><text transform="translate(11 ${Ht/2}) rotate(-90)" text-anchor="middle" font-size="11" fill="${css('--ink3')}">precision</text>`;
+ s+=`<line x1="${X(0)}" x2="${X(1)}" y1="${Yy(prev)}" y2="${Yy(prev)}" stroke="${css('--ochre')}" stroke-dasharray="4 4"/><text x="${X(.9)}" y="${Yy(prev)+16}" text-anchor="end" font-size="10.5" fill="${css('--ochre')}">no skill = prevalence ${f3(prev)}</text>`;
+ s+=`<path d="${pr.map((p,i)=>(i?'L':'M')+X(p[0]).toFixed(1)+' '+Yy(p[1]).toFixed(1)).join('')}" fill="none" stroke="${css('--ink')}" stroke-width="1.8"/>`;
+ s+=`<circle cx="${X(lr.recall)}" cy="${Yy(lr.precision)}" r="4.5" fill="${css('--blue')}"/><text x="${X(lr.recall)+8}" y="${Yy(lr.precision)+20}" font-size="10.5" fill="${css('--blue')}">logistic regression</text><circle cx="${X(1)}" cy="${Yy(prev)}" r="4.5" fill="${css('--ochre')}"/><text x="${X(1)-8}" y="${Yy(prev)-20}" text-anchor="end" font-size="10.5" fill="${css('--ochre')}">flag every lot</text>`;
+ const p=k.tp+k.fp?k.tp/(k.tp+k.fp):0,rc=k.tp/pos;s+=`<circle cx="${X(rc)}" cy="${Yy(p)}" r="8" fill="${css('--signal')}" stroke="${css('--paper2')}" stroke-width="2.5"/><text x="${X(rc)+12}" y="${Yy(p)-12}" font-size="11" font-weight="600" fill="${css('--signal')}">this threshold</text>`;$('#prSvg').innerHTML=s}
+const shown={};function num(id,v,d,suf=''){const a=shown[id]??v;shown[id]=v;anim(240,t=>{const e=$('#'+id);if(e)e.firstChild.textContent=lerp(a,v,t).toFixed(d)+suf})}
+function update(){const k=counts(thr),p=k.tp+k.fp?k.tp/(k.tp+k.fp):0,rc=k.tp/pos,f1=p+rc?2*p*rc/(p+rc):0,ac=(k.tp+k.tn)/N;$('#thrV').textContent=thr.toFixed(3);$('#thr').value=thr;
+ if(!$('#mets').children.length)$('#mets').innerHTML=[['mP','Precision'],['mR','Recall'],['mF','F1'],['mA','Accuracy']].map(([id,l])=>`<div><b id="${id}">0<i></i></b><span>${l}</span></div>`).join('');
+ num('mP',p,3);num('mR',rc,3);num('mF',f1,3);num('mA',ac,3);
+ $('#exTxt').textContent=`Flagged at ${thr.toFixed(3)}: ${k.tp+k.fp} of ${N} lots. ${k.tp} of the ${pos} defects are caught, ${k.fp} good lots go to inspection, and ${k.fn} defects ship undetected.`;strip();waffle();prChart(k)}
+function setThr(v){thr=clamp(v,0,1);update()}
+$('#thr').oninput=e=>{if(job)job.cancel();setThr(+e.target.value)};
+$$('#presets button').forEach(b=>b.onclick=()=>{const to=b.dataset.p==='val'?thrVal:b.dataset.p==='flag'?0:1.001,from=thr;if(job)job.cancel();job=anim(520,t=>{thr=lerp(from,to,ease(t));update()})});
+const px2=e=>{const r=cvS.getBoundingClientRect();return SV(e.clientX-r.left,r.width)};
+cvS.addEventListener('pointerdown',e=>{drag=true;cvS.setPointerCapture(e.pointerId);if(job)job.cancel();setThr(px2(e))});
+cvS.addEventListener('pointermove',e=>{if(drag)setThr(px2(e))});cvS.addEventListener('pointerup',()=>drag=false);cvS.addEventListener('pointercancel',()=>drag=false);
+const cw=$('#cvWaffle');cw.addEventListener('pointermove',e=>{const r=cw.getBoundingClientRect(),x=e.clientX-r.left-wf.ox,y=e.clientY-r.top-wf.oy,cx=Math.floor(x/wf.cell),cy=Math.floor(y/wf.cell),i=cy*cols+cx;
+ if(cx<0||cx>=cols||cy<0||i<0||i>=N){tip.classList.remove('on');return}const f=P[i]>=thr;tip.textContent=`${T[i]} · score ${P[i].toFixed(3)} · ${Y[i]?'defective':'pass'} · ${f?'flagged':'not flagged'}`;tip.style.left=Math.min(innerWidth-tip.offsetWidth-8,e.clientX+14)+'px';tip.style.top=(e.clientY+16)+'px';tip.classList.add('on')});
+cw.addEventListener('pointerleave',()=>tip.classList.remove('on'));
+onRedraw(update)})();
+
+/* ---------- 06 training ---------- */
+(function(){const H=D.history;let ep=1;
+function chart(svg,key,title,log,color,ref){const W=460,Ht=240,L=48,R=10,T=28,B=30,ys=H.map(h=>log?Math.log10(h[key]):h[key]);let lo=Math.min(...ys,ref!=null?ref:Infinity),hi=Math.max(...ys);const pad=(hi-lo)*.1||.1;lo-=pad;hi+=pad;
+ const X=x=>L+(x-1)/39*(W-L-R),Y=y=>T+(hi-y)/(hi-lo)*(Ht-T-B);let s=`<text x="${L}" y="14" font-size="12" font-weight="600" fill="${css('--ink')}">${title}</text>`;
+ for(let t=0;t<=4;t++){const v=lo+(hi-lo)*t/4;s+=`<line x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--rule')}"/><text x="${L-6}" y="${Y(v)+4}" text-anchor="end" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${log?'1e'+v.toFixed(1):v.toFixed(3)}</text>`}
+ [1,10,20,30,40].forEach(x=>s+=`<text x="${X(x)}" y="${Ht-10}" text-anchor="middle" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${x}</text>`);
+ if(ref!=null)s+=`<line x1="${L}" x2="${W-R}" y1="${Y(ref)}" y2="${Y(ref)}" stroke="${css('--ochre')}" stroke-dasharray="4 4"/><text x="${W-R}" y="${Y(ref)-5}" text-anchor="end" font-size="10" fill="${css('--ochre')}">no skill (validation prevalence ${ref})</text>`;
+ s+=`<path d="${ys.map((y,i)=>(i?'L':'M')+X(i+1)+' '+Y(y)).join('')}" fill="none" stroke="${color}" stroke-width="2.4"/><line x1="${X(ep)}" x2="${X(ep)}" y1="${T}" y2="${Ht-B}" stroke="${css('--ink')}" stroke-opacity=".5"/><circle cx="${X(ep)}" cy="${Y(ys[ep-1])}" r="5.5" fill="${color}" stroke="${css('--paper2')}" stroke-width="2"/>`;$(svg).innerHTML=s}
+function draw(){const h=H[ep-1],best=H.reduce((a,b)=>b.val_ap>a.val_ap?b:a);chart('#trA','clf','Training classification loss (log scale)',true,css('--blue'));chart('#trB','val_ap','Validation average precision',false,css('--signal'),+D.splits[1].prevalence.toFixed(3));
+ $('#trTxt').innerHTML=`Epoch <b>${ep}</b>: training loss <b>${h.clf.toFixed(4)}</b>, validation AP <b>${h.val_ap.toFixed(3)}</b>. Best validation epoch: <b>${best.epoch}</b> (AP ${best.val_ap.toFixed(3)}); that checkpoint is the final model.`}
+['#trA','#trB'].forEach(id=>{const e=$(id);let d=false;const set=ev=>{const r=e.getBoundingClientRect(),x=(ev.clientX-r.left)/r.width*460;ep=clamp(Math.round(1+(x-48)/(460-58)*39),1,40);draw()};
+ e.addEventListener('pointerdown',ev=>{d=true;e.setPointerCapture(ev.pointerId);set(ev)});e.addEventListener('pointermove',ev=>{if(d)set(ev)});e.addEventListener('pointerup',()=>d=false)});
+onRedraw(draw)})();
+
+/* ---------- 07 reliability ---------- */
+(function(){let metric='f1';const S=D.seeds,B=D.baselines,M=D.test.metrics;
+function draw(){const key=metric,ci=key==='f1'?D.test.f1_ci:D.test.pr_ci,ref=key==='f1'?B.flag.f1:D.test.prevalence,mx=key==='f1'?.3:.25,W=760,L=210,R=24,X=v=>L+v/mx*(W-L-R);
+ const rows=[{n:'Repaired model, seed 1337',v:M[key],ci,c:css('--signal')},{n:'Flag every lot',v:key==='f1'?B.flag.f1:B.flag.pr_auc,c:css('--ochre')},{n:'Logistic regression',v:B.logreg[key],c:css('--blue')},...S.map(r=>({n:`Full pipeline, seed ${r.seed}`,v:r[key==='f1'?'f1':'pr_auc'],c:css('--ink2')}))];
+ let s='';for(let q=0;q<=mx+1e-9;q+=.05)s+=`<line x1="${X(q)}" x2="${X(q)}" y1="10" y2="${rows.length*34+16}" stroke="${css('--rule')}"/><text x="${X(q)}" y="${rows.length*34+34}" text-anchor="middle" font-size="10" fill="${css('--ink3')}" font-family="${css('--mono')}">${q.toFixed(2)}</text>`;
+ s+=`<line x1="${X(ref)}" x2="${X(ref)}" y1="6" y2="${rows.length*34+16}" stroke="${css('--ochre')}" stroke-dasharray="4 4" stroke-width="1.6"/>`;
+ rows.forEach((r,i)=>{const y=30+i*34;s+=`<text x="${L-14}" y="${y+4}" text-anchor="end" font-size="12.5" fill="${css('--ink')}" ${i===0?'font-weight="600"':''}>${r.n}</text>`;if(r.ci)s+=`<rect x="${X(r.ci[0])}" y="${y-6}" width="${X(r.ci[1])-X(r.ci[0])}" height="12" rx="6" fill="${r.c}" opacity=".22"/><text x="${X(r.ci[1])+8}" y="${y+4}" font-size="10.5" fill="${css('--ink3')}" font-family="${css('--mono')}">${f3(r.ci[0])} to ${f3(r.ci[1])}</text>`;
+  s+=`<circle cx="${X(r.v)}" cy="${y}" r="${i===0?7:5}" fill="${r.c}"><title>${r.n}: ${f3(r.v)}</title></circle><text x="${X(r.v)}" y="${y-11}" text-anchor="middle" font-size="10.5" fill="${css('--ink2')}" font-family="${css('--mono')}">${f3(r.v)}</text>`});
+ $('#forest').setAttribute('viewBox',`0 0 ${W} ${rows.length*34+44}`);$('#forest').innerHTML=s}
+$$('#forestSeg button').forEach(b=>b.onclick=()=>{metric=b.dataset.m;$$('#forestSeg button').forEach(x=>x.classList.toggle('on',x===b));draw()});onRedraw(draw);
+const mean=k=>S.reduce((a,b)=>a+b[k],0)/S.length,sd=k=>Math.sqrt(S.reduce((a,b)=>a+(b[k]-mean(k))**2,0)/(S.length-1));
+$('#seedTbl').innerHTML='<tr><th>Seed</th><th class="r">Threshold</th><th class="r">Precision</th><th class="r">Recall</th><th class="r">F1</th><th class="r">PR-AUC</th></tr>'+S.map(r=>`<tr><td>${r.seed}</td><td class="r">${r.threshold.toFixed(3)}</td><td class="r">${f3(r.precision)}</td><td class="r">${f3(r.recall)}</td><td class="r">${f3(r.f1)}</td><td class="r">${f3(r.pr_auc)}</td></tr>`).join('')+`<tr><td><b>Mean ± sd</b></td><td></td><td class="r">${f3(mean('precision'))} ± ${f3(sd('precision'))}</td><td class="r">${f3(mean('recall'))} ± ${f3(sd('recall'))}</td><td class="r"><b>${f3(mean('f1'))} ± ${f3(sd('f1'))}</b></td><td class="r">${f3(mean('pr_auc'))} ± ${f3(sd('pr_auc'))}</td></tr>`})();
+
+/* ---------- 08 other defects ---------- */
+(function(){const x=D.evidence.extras,I=D.evidence.leak,n=D.test.metrics.n;
+const items=[[pct(x.share_sq_mass_from_z_gt5),`of the squared error the reconstruction loss sees comes from ${pct(x.frac_entries_z_gt5,2)} of the readings (|z| &gt; 5). ${x.cols_max_z_gt20} sensors reach |z| &gt; 20.`,'Loss dominated by a few extreme readings'],
+[`${x.dead_cols}`,`of ${D.meta.sensors} sensors are constant (${x.constant_cols}) or over 50% missing (${x.mostly_missing_cols}), and were fed to the model anyway.`,'Unusable sensors'],
+[x.sensor0_imputed_value.toFixed(1),`was imputed for ${x.sensor0_rows_imputed} missing sensor_0 readings. No real wafer reads below ${x.sensor0_min_real.toFixed(1)}: the mean included the sentinel zeros.`,'An impossible imputed value'],
+[`${Math.round(x.thr05_flagged_share*n)} of ${n}`,`real test lots are flagged when a model trained at 50% defect prevalence is judged at the fixed 0.5 threshold. The true defect rate is ${pct(x.test_prevalence)}.`,'A threshold set on the wrong prior'],
+[`${I.n_features_shift_gt_0_25_sd} of ${I.n_features}`,'feature means in the scaler shipped to deployment differ from a training-only fit by more than 0.25 sd, because it was fitted on every lot.','A leaky deployment artifact']];
+const box=$('#otherList');box.innerHTML=items.map(it=>`<div class="oi rv"><div class="on">${it[0]}</div><div><h3>${it[2]}</h3><p class="muted">${it[1]}</p></div></div>`).join('');
+$$('.rv',box).forEach((e,i)=>{e.style.transitionDelay=(i*70)+'ms';io.observe(e)})})();
+
+/* ---------- 09 other models ---------- */
+(function(){const B=D.backtest,names={repaired_sae:'Repaired autoencoder',logistic_regression:'Logistic regression',random_forest:'Random forest',gradient_boosting:'Gradient boosting'},rows=Object.keys(B.models);
+const colors={repaired_sae:'--signal',logistic_regression:'--blue',random_forest:'--teal',gradient_boosting:'--ochre'};
+function draw(){const W=760,L=190,R=34,X=v=>L+(v-.3)/.7*(W-L-R);let s='';
+ for(let q=.3;q<=1.0001;q+=.1)s+=`<line x1="${X(q)}" x2="${X(q)}" y1="14" y2="${rows.length*62+22}" stroke="${css('--rule')}"/><text x="${X(q)}" y="${rows.length*62+42}" text-anchor="middle" font-size="10.5" fill="${css('--ink3')}" font-family="${css('--mono')}">${q.toFixed(1)}</text>`;
+ s+=`<line x1="${X(.5)}" x2="${X(.5)}" y1="8" y2="${rows.length*62+22}" stroke="${css('--ochre')}" stroke-dasharray="4 4" stroke-width="1.6"/><text x="${X(.5)}" y="${rows.length*62+58}" text-anchor="middle" font-size="10.5" fill="${css('--ochre')}">chance</text>`;
+ rows.forEach((m,i)=>{const r=B.models[m],y=44+i*62,c=css(colors[m]);
+  s+=`<text x="${L-16}" y="${y+4}" text-anchor="end" font-size="13" ${i===0?'font-weight="600"':''} fill="${css('--ink')}">${names[m]}</text>`;
+  s+=`<rect x="${X(r.roc_auc_ci[0])}" y="${y-9}" width="${X(r.roc_auc_ci[1])-X(r.roc_auc_ci[0])}" height="18" rx="9" fill="${c}" opacity=".2"/>`;
+  r.per_window.forEach((p,k)=>{if(p.roc_auc===null)return;s+=`<circle cx="${X(p.roc_auc)}" cy="${y-12+k*6}" r="3.6" fill="${css('--ink3')}" opacity=".85"><title>${B.windows[k].start} to ${B.windows[k].end}: ROC-AUC ${p.roc_auc.toFixed(2)}, ${B.windows[k].defects} defects</title></circle>`});
+  s+=`<line x1="${X(r.mean_roc_auc)}" x2="${X(r.mean_roc_auc)}" y1="${y-16}" y2="${y+16}" stroke="${c}" stroke-width="3.2"/><text x="${X(r.roc_auc_ci[1])+10}" y="${y+4}" font-size="11.5" font-weight="600" fill="${css('--ink')}" font-family="${css('--mono')}">${r.mean_roc_auc.toFixed(2)}</text>`});
+ $('#btSvg').setAttribute('viewBox',`0 0 ${W} ${rows.length*62+68}`);$('#btSvg').innerHTML=s}
+onRedraw(draw);
+$('#btCap').textContent=`ROC-AUC per window (grey dots; hover for dates and defect counts). The coloured tick is the mean over ${B.windows.length} windows and the bar is its 95% bootstrap interval. Windows cover ${B.windows[0].start} to ${B.windows[B.windows.length-1].end} and hold ${B.windows.map(w=>w.defects).join(', ')} defects (${B.total_defects} in total).`;
+$('#btTbl').innerHTML='<tr><th>Model</th><th class="r">Mean ROC-AUC</th><th class="r">95% interval</th><th class="r">Mean PR-AUC</th></tr>'+rows.map(m=>{const r=B.models[m];return `<tr><td>${names[m]}</td><td class="r"><b>${r.mean_roc_auc.toFixed(3)}</b></td><td class="r">${r.roc_auc_ci[0].toFixed(2)} to ${r.roc_auc_ci[1].toFixed(2)}</td><td class="r">${r.mean_pr_auc.toFixed(3)}</td></tr>`}).join('')+`<tr><td class="muted">Chance</td><td class="r muted">0.500</td><td class="r muted"></td><td class="r muted">${B.mean_prevalence.toFixed(3)} (prevalence)</td></tr>`;
+const s=B.models.repaired_sae,lo=Math.min(...rows.filter(m=>m!=='repaired_sae').map(m=>B.models[m].mean_roc_auc)),hi=Math.max(...rows.filter(m=>m!=='repaired_sae').map(m=>B.models[m].mean_roc_auc));
+$('#v3').innerHTML=`<b>The supplied model does not carry a signal forward in time.</b>Validation precision peaks in the first epoch while it memorises the training defects. Across five future windows its ROC-AUC averages ${s.mean_roc_auc.toFixed(2)}, with an interval (${s.roc_auc_ci[0].toFixed(2)} to ${s.roc_auc_ci[1].toFixed(2)}) that includes chance. Simpler models reach ${(Math.min(...rows.filter(m=>m!=='repaired_sae').map(m=>B.models[m].mean_roc_auc))).toFixed(2)} to ${hi.toFixed(2)}, a weak and unstable signal that is still far from usable precision.`})();
+
+/* ---------- reproduce ---------- */
+(function(){const C=[['pip install -r requirements.txt\npython -m pytest -q'],['jupyter nbconvert --to notebook --execute --inplace wafer_guard_fixed.ipynb'],['python audit_evidence.py\npython backtest.py\npython dashboard/build_dashboard.py']];const T=['Install and test','Run the notebook','Reproduce the evidence and rebuild this page'];
+$('#cmds').innerHTML=C.map((c,i)=>`<p class="kicker" style="margin:20px 0 8px">${T[i]}</p><div class="copy"><pre id="cmd${i}">${c[0]}</pre><button class="btn" data-i="${i}">Copy</button></div>`).join('');
+$$('#cmds .btn').forEach(b=>b.onclick=()=>{const t=$('#cmd'+b.dataset.i).textContent,ok=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1400)};navigator.clipboard?navigator.clipboard.writeText(t).then(ok,ok):ok()})})();
+
+update();
+</script>
+</body>
+</html>
